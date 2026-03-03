@@ -547,7 +547,7 @@ function doPost(e) {
 // ════════════════════════════════════════
 
 // Apps Script 배포 URL (관리자 설정 가이드 4단계 참고)
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyBKLdxuGiJ3CGl-4S2M2gNhHFN_66rRnOlyeclNs6hjMwqO2kqseM-K2DFZhnlwASvRw/exec';  // 여기에 URL 붙여넣기
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwjl8XkJ36NKYnKNoC0u9dYbhWhhbZ8NyWEToXjNOztHfXz9ELK1dUrWCFNyLPaNLtR0Q/exec';  // 여기에 URL 붙여넣기
 
 // 서버 목록 (이름, GPU 수, 모델명 수정)
 const SERVERS = [
@@ -594,14 +594,13 @@ function loadBookings() {
     renderAll(); return;
   }
 
-  // JSONP 방식으로 CORS 우회
   return new Promise((resolve) => {
     const cbName = 'gpuCb_' + Date.now();
     const script = document.createElement('script');
 
     window[cbName] = function(data) {
       delete window[cbName];
-      document.body.removeChild(script);
+      if (script.parentNode) script.parentNode.removeChild(script);
       bookings = Array.isArray(data) ? data.filter(r => r.id) : [];
       saveLocal();
       renderAll();
@@ -610,8 +609,7 @@ function loadBookings() {
 
     script.onerror = function() {
       delete window[cbName];
-      document.body.removeChild(script);
-      console.warn('Sheets 로드 실패, 로컬 데이터 사용');
+      if (script.parentNode) script.parentNode.removeChild(script);
       const saved = localStorage.getItem('gpu_bookings');
       bookings = saved ? JSON.parse(saved) : demoBookings();
       renderAll();
@@ -658,7 +656,12 @@ function getWeekDates() {
   return Array.from({length:7}, (_,i) => { const d=new Date(monday); d.setDate(monday.getDate()+i); return d; });
 }
 
-function fmtDate(d) { return d.toISOString().slice(0,10); }
+function fmtDate(d) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}}
 
 function isPast(dateStr, slot) {
   const now = new Date();
