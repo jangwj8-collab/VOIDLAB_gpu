@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPU 예약 스케줄러</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=DM+Mono:wght@300;400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f5f2eb;
+  --surface: #fffdf7;
+  --card: #ffffff;
+  --border: #e2ddd4;
+  --border2: #ccc6bb;
+  --text: #1a1714;
+  --muted: #8a8278;
+  --accent: #2d5a27;
+  --red: #c0392b;
+  --green: #2d5a27;
+  --mono: 'DM Mono', monospace;
+  --sans: 'Syne', sans-serif;
+  --body: 'Gowun Dodum', sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--body);
+  min-height: 100vh;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23a09880' fill-opacity='0.06'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
+
+header {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(245,242,235,0.95);
+  backdrop-filter: blur(12px);
+  border-bottom: 2px solid var(--text);
+  padding: 0 2rem;
+  display: flex; align-items: center; justify-content: space-between;
+  height: 64px;
+}
+
+.logo {
+  font-family: var(--sans); font-size: 1.25rem; font-weight: 800;
+  letter-spacing: -0.03em; display: flex; align-items: center; gap: 10px;
+}
+.logo-mark {
+  width: 32px; height: 32px; background: var(--text); border-radius: 6px;
+  display: flex; align-items: center; justify-content: center; color: var(--bg); font-size: 16px;
+}
+
+.user-pill {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--text); color: var(--bg); border-radius: 20px;
+  padding: 6px 14px; font-family: var(--mono); font-size: 0.75rem;
+  cursor: pointer; transition: opacity 0.2s; border: none;
+}
+.user-pill:hover { opacity: 0.8; }
+
+.nav-tabs {
+  display: flex; border-bottom: 2px solid var(--border2);
+  padding: 0 2rem; background: var(--surface); position: relative; z-index: 1;
+}
+.nav-tab {
+  background: none; border: none; border-bottom: 3px solid transparent;
+  margin-bottom: -2px; padding: 14px 20px;
+  font-family: var(--sans); font-size: 0.82rem; font-weight: 700;
+  letter-spacing: 0.03em; cursor: pointer; color: var(--muted);
+  transition: all 0.2s; text-transform: uppercase;
+}
+.nav-tab:hover { color: var(--text); }
+.nav-tab.active { color: var(--text); border-bottom-color: var(--text); }
+
+.container { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: 2rem; }
+.page { display: none; }
+.page.active { display: block; }
+
+.server-tabs { display: flex; gap: 6px; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.server-tab {
+  padding: 8px 18px; border: 2px solid var(--border2); border-radius: 4px;
+  background: var(--surface); font-family: var(--mono); font-size: 0.78rem;
+  cursor: pointer; transition: all 0.15s; color: var(--muted); font-weight: 500;
+}
+.server-tab:hover { border-color: var(--text); color: var(--text); }
+.server-tab.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+.week-nav {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem;
+}
+.week-title { font-family: var(--sans); font-size: 1.4rem; font-weight: 800; letter-spacing: -0.02em; }
+.week-btns { display: flex; gap: 6px; align-items: center; }
+.week-btn {
+  background: var(--surface); border: 2px solid var(--border2); color: var(--text);
+  width: 36px; height: 36px; border-radius: 4px; cursor: pointer; font-size: 1rem;
+  transition: all 0.15s; display: flex; align-items: center; justify-content: center;
+}
+.week-btn:hover { background: var(--text); color: var(--bg); border-color: var(--text); }
+.today-btn {
+  background: var(--surface); border: 2px solid var(--border2); color: var(--text);
+  padding: 0 14px; height: 36px; border-radius: 4px; cursor: pointer;
+  font-family: var(--mono); font-size: 0.72rem; font-weight: 500; transition: all 0.15s;
+}
+.today-btn:hover { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+.cal-wrap {
+  background: var(--card); border: 2px solid var(--text);
+  border-radius: 8px; overflow: hidden; box-shadow: 4px 4px 0 var(--text);
+}
+.cal-grid { display: grid; grid-template-columns: 90px repeat(7, 1fr); }
+
+.cal-head-empty { background: var(--text); border-right: 1px solid rgba(255,255,255,0.15); }
+.cal-head {
+  background: var(--text); color: var(--bg); text-align: center;
+  padding: 12px 4px; border-right: 1px solid rgba(255,255,255,0.15);
+  font-family: var(--mono); font-size: 0.7rem;
+}
+.cal-head:last-child { border-right: none; }
+.cal-head .day-name { font-weight: 500; opacity: 0.7; display: block; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.cal-head .day-num { font-family: var(--sans); font-size: 1.1rem; font-weight: 800; display: block; margin-top: 2px; }
+.cal-head.today-col .day-num {
+  background: var(--bg); color: var(--text); width: 32px; height: 32px;
+  border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+}
+
+.cal-time {
+  background: var(--bg); border-right: 2px solid var(--border2); border-bottom: 1px solid var(--border);
+  padding: 0 10px; display: flex; flex-direction: column; align-items: flex-end; justify-content: center;
+  font-family: var(--mono); font-size: 0.68rem; color: var(--muted); font-weight: 500; min-height: 80px; gap: 2px;
+}
+
+.cal-cell {
+  border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  min-height: 80px; padding: 6px; cursor: pointer; transition: background 0.15s; position: relative;
+}
+.cal-cell:last-child { border-right: none; }
+.cal-cell:hover { background: rgba(45,90,39,0.05); }
+.cal-cell.past { background: rgba(0,0,0,0.02); cursor: default; }
+.cal-cell.past:hover { background: rgba(0,0,0,0.02); }
+
+.booking-block {
+  border-radius: 4px; padding: 4px 7px; font-size: 0.67rem; line-height: 1.4; margin-bottom: 3px;
+}
+.booking-block.mine { background: #e8f0e7; border-left: 3px solid var(--green); color: var(--green); }
+.booking-block.others { background: #f0e8e8; border-left: 3px solid var(--red); color: var(--red); }
+.booking-name { font-weight: 600; }
+.booking-gpu { opacity: 0.75; font-size: 0.62rem; }
+
+.add-hint {
+  color: var(--border2); font-size: 0.62rem; font-family: var(--mono);
+  position: absolute; bottom: 5px; right: 6px; opacity: 0; transition: opacity 0.15s;
+}
+.cal-cell:not(.past):hover .add-hint { opacity: 1; }
+
+.gpu-legend { display: flex; gap: 6px; margin-bottom: 1rem; flex-wrap: wrap; }
+.gpu-chip {
+  display: flex; align-items: center; gap: 5px; padding: 4px 10px;
+  border: 1.5px solid var(--border2); border-radius: 20px; font-family: var(--mono);
+  font-size: 0.68rem; cursor: pointer; transition: all 0.15s; color: var(--muted);
+}
+.gpu-chip:hover { border-color: var(--text); color: var(--text); }
+.gpu-chip.selected { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+.main-layout { display: grid; grid-template-columns: 1fr 270px; gap: 1.5rem; align-items: start; }
+.sidebar { display: flex; flex-direction: column; gap: 1rem; }
+
+.side-card {
+  background: var(--card); border: 2px solid var(--border2);
+  border-radius: 8px; padding: 1.2rem; box-shadow: 3px 3px 0 var(--border2);
+}
+.side-title {
+  font-family: var(--sans); font-size: 0.78rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.8rem;
+  padding-bottom: 0.6rem; border-bottom: 1px solid var(--border);
+}
+
+.upcoming-item { padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 0.75rem; }
+.upcoming-item:last-child { border-bottom: none; }
+.upcoming-name { font-weight: 600; }
+.upcoming-meta { color: var(--muted); font-size: 0.68rem; margin-top: 2px; font-family: var(--mono); }
+
+/* ── OVERLAY & MODAL ── */
+.overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(26,23,20,0.5); backdrop-filter: blur(3px);
+  z-index: 200; align-items: center; justify-content: center;
+}
+.overlay.open { display: flex; }
+
+.modal {
+  background: var(--card); border: 2px solid var(--text); border-radius: 8px;
+  padding: 2rem; width: 480px; max-width: 95vw;
+  box-shadow: 6px 6px 0 var(--text); animation: popIn 0.2s ease; position: relative;
+}
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0); }
+}
+
+.modal-title { font-family: var(--sans); font-size: 1.2rem; font-weight: 800; margin-bottom: 0.3rem; }
+.modal-subtitle {
+  font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
+  margin-bottom: 1.2rem; padding-bottom: 0.8rem; border-bottom: 1px solid var(--border);
+}
+.modal-close {
+  position: absolute; top: 1rem; right: 1rem;
+  background: none; border: none; font-size: 1.3rem; cursor: pointer;
+  color: var(--muted); line-height: 1; transition: color 0.2s;
+}
+.modal-close:hover { color: var(--text); }
+
+.form-group { margin-bottom: 1rem; }
+.form-label {
+  display: block; font-family: var(--mono); font-size: 0.68rem; font-weight: 500;
+  color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px;
+}
+.form-input, .form-select, .form-textarea {
+  width: 100%; background: var(--bg); border: 2px solid var(--border2);
+  color: var(--text); font-family: var(--body); font-size: 0.85rem;
+  padding: 9px 12px; border-radius: 4px; outline: none; transition: border-color 0.2s;
+}
+.form-input:focus, .form-select:focus, .form-textarea:focus { border-color: var(--text); }
+.form-textarea { resize: vertical; min-height: 70px; }
+
+.gpu-select-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.gpu-select-btn {
+  padding: 8px 4px; border: 2px solid var(--border2); border-radius: 4px;
+  background: var(--bg); font-family: var(--mono); font-size: 0.72rem;
+  cursor: pointer; text-align: center; transition: all 0.15s; color: var(--muted);
+}
+.gpu-select-btn:hover:not(:disabled) { border-color: var(--text); color: var(--text); }
+.gpu-select-btn.selected:not(:disabled) { background: var(--text); color: var(--bg); border-color: var(--text); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 11px 22px; border-radius: 4px; border: 2px solid transparent;
+  cursor: pointer; font-family: var(--sans); font-size: 0.82rem; font-weight: 700;
+  transition: all 0.15s; letter-spacing: 0.02em;
+}
+.btn-primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn-primary:hover { background: var(--accent); border-color: var(--accent); }
+.btn-ghost { background: transparent; border-color: var(--border2); color: var(--muted); }
+.btn-ghost:hover { border-color: var(--text); color: var(--text); }
+.btn-danger { background: transparent; border-color: var(--red); color: var(--red); }
+.btn-danger:hover { background: var(--red); color: white; }
+
+.modal-footer { display: flex; gap: 8px; margin-top: 1.2rem; padding-top: 1rem; border-bottom: 0; border-top: 1px solid var(--border); }
+
+/* ── TOAST ── */
+.toast {
+  position: fixed; bottom: 1.5rem; right: 1.5rem;
+  background: var(--text); color: var(--bg); border-radius: 6px;
+  padding: 12px 18px; font-size: 0.8rem; z-index: 300;
+  transform: translateY(80px); opacity: 0; transition: all 0.3s ease;
+  box-shadow: 4px 4px 0 rgba(0,0,0,0.2); max-width: 300px;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast-title { font-family: var(--sans); font-weight: 700; margin-bottom: 2px; }
+.toast-msg { opacity: 0.7; font-size: 0.73rem; }
+
+/* ── SETUP MODAL ── */
+.setup-modal {
+  background: var(--card); border: 2px solid var(--text); border-radius: 8px;
+  padding: 2.5rem; width: 400px; max-width: 95vw;
+  box-shadow: 6px 6px 0 var(--text); animation: popIn 0.2s ease; text-align: center;
+}
+.setup-title { font-family: var(--sans); font-size: 1.6rem; font-weight: 800; margin-bottom: 0.5rem; }
+.setup-sub { color: var(--muted); font-size: 0.82rem; margin-bottom: 1.5rem; line-height: 1.6; }
+
+/* ── INFO PAGE ── */
+.info-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 1rem; margin-bottom: 1.5rem; }
+.info-card { background: var(--card); border: 2px solid var(--border2); border-radius: 8px; padding: 1.4rem; box-shadow: 3px 3px 0 var(--border2); }
+.info-card-label { font-family: var(--mono); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 0.5rem; }
+.info-card-value { font-family: var(--sans); font-size: 2rem; font-weight: 800; }
+.rule-list { display: flex; flex-direction: column; gap: 0.6rem; }
+.rule-item { display: flex; gap: 10px; align-items: flex-start; font-size: 0.82rem; padding: 10px 14px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); }
+.rule-num { font-family: var(--mono); font-weight: 500; color: var(--muted); flex-shrink: 0; font-size: 0.75rem; margin-top: 1px; }
+
+/* ── SETUP GUIDE ── */
+.setup-step { display: flex; gap: 1rem; padding: 1rem; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); margin-bottom: 0.8rem; }
+.step-num { width: 28px; height: 28px; background: var(--text); color: var(--bg); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: var(--sans); font-weight: 800; font-size: 0.85rem; flex-shrink: 0; }
+.step-title { font-weight: 700; font-size: 0.85rem; margin-bottom: 4px; }
+.step-desc { font-size: 0.78rem; color: var(--muted); line-height: 1.6; }
+.code-inline { background: var(--text); color: var(--bg); padding: 2px 7px; border-radius: 3px; font-family: var(--mono); font-size: 0.78em; }
+.section-title { font-family: var(--sans); font-size: 1.3rem; font-weight: 800; margin-bottom: 1rem; }
+
+@media (max-width: 900px) {
+  .main-layout { grid-template-columns: 1fr; }
+  .info-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 600px) {
+  .container { padding: 1rem; }
+  header { padding: 0 1rem; }
+  .nav-tabs { padding: 0 1rem; }
+  .info-grid { grid-template-columns: 1fr; }
+  .gpu-select-grid { grid-template-columns: repeat(2,1fr); }
+  .cal-grid { grid-template-columns: 60px repeat(7,1fr); }
+}
+</style>
+</head>
+<body>
+
+<!-- ── 이름 입력 오버레이 ── -->
+<div class="overlay open" id="setupOverlay">
+  <div class="setup-modal">
+    <div style="font-size:2.5rem;margin-bottom:0.8rem;">🖥️</div>
+    <div class="setup-title">GPU 스케줄러</div>
+    <div class="setup-sub">시작하기 전에 이름을 입력해주세요.<br>예약 시 달력에 표시될 이름입니다.</div>
+    <div class="form-group" style="text-align:left;">
+      <label class="form-label">이름 / 닉네임</label>
+      <input class="form-input" id="setupName" placeholder="예: 김지훈"
+        onkeydown="if(event.key==='Enter')confirmSetup()">
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-top:0.5rem;" onclick="confirmSetup()">시작하기 →</button>
+  </div>
+</div>
+
+<!-- ── HEADER ── -->
+<header>
+  <div class="logo">
+    <div class="logo-mark">⚡</div>
+    GPU 스케줄러
+  </div>
+  <button class="user-pill" onclick="changeUser()">
+    <span>👤</span>
+    <span id="headerUser">--</span>
+    <span style="opacity:0.5;font-size:0.65rem;">변경</span>
+  </button>
+</header>
+
+<!-- ── NAV ── -->
+<div class="nav-tabs">
+  <button class="nav-tab active" onclick="showPage('schedule',this)">📅 예약 달력</button>
+  <button class="nav-tab" onclick="showPage('info',this)">📋 이용 안내</button>
+  <button class="nav-tab" onclick="showPage('guide',this)">⚙️ 관리자 설정</button>
+</div>
+
+<!-- ══ PAGE: 예약 달력 ══ -->
+<div id="page-schedule" class="page active">
+<div class="container">
+  <div class="server-tabs" id="serverTabs"></div>
+  <div class="main-layout">
+    <div>
+      <div class="gpu-legend" id="gpuLegend"></div>
+      <div class="week-nav">
+        <div class="week-title" id="weekTitle"></div>
+        <div class="week-btns">
+          <button class="week-btn" onclick="changeWeek(-1)">‹</button>
+          <button class="today-btn" onclick="goToday()">오늘</button>
+          <button class="week-btn" onclick="changeWeek(1)">›</button>
+        </div>
+      </div>
+      <div class="cal-wrap"><div class="cal-grid" id="calGrid"></div></div>
+      <div style="margin-top:0.7rem;font-size:0.7rem;color:var(--muted);font-family:var(--mono);">
+        빈 칸 클릭 → 예약 &nbsp;|&nbsp; 초록 블록(내 예약) 클릭 → 취소
+      </div>
+    </div>
+    <div class="sidebar">
+      <div class="side-card">
+        <div class="side-title">이번 주 예약 현황</div>
+        <div id="upcomingList"></div>
+      </div>
+      <div class="side-card">
+        <div class="side-title">오늘 GPU 가용 현황</div>
+        <div id="availSummary"></div>
+      </div>
+      <div class="side-card" style="background:var(--text);color:var(--bg);border-color:var(--text);box-shadow:3px 3px 0 rgba(0,0,0,0.3);">
+        <div style="font-family:var(--sans);font-weight:700;font-size:0.85rem;margin-bottom:0.6rem;">📌 예약 규칙</div>
+        <div style="font-size:0.75rem;line-height:1.8;opacity:0.85;">
+          · 오전: 09:00 ~ 13:00<br>
+          · 오후: 13:00 ~ 18:00<br>
+          · 최대 연속 사용: 1일<br>
+          · 긴급 사용 시 사전 협의
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ══ PAGE: 이용 안내 ══ -->
+<div id="page-info" class="page">
+<div class="container">
+  <div class="section-title">이용 안내</div>
+  <div class="info-grid">
+    <div class="info-card"><div class="info-card-label">등록 서버</div><div class="info-card-value" id="infoSvCount">-</div></div>
+    <div class="info-card"><div class="info-card-label">총 GPU 수</div><div class="info-card-value" id="infoGpuCount">-</div></div>
+    <div class="info-card"><div class="info-card-label">이번 주 예약</div><div class="info-card-value" id="infoBookCount">-</div></div>
+  </div>
+  <div class="section-title">예약 규칙</div>
+  <div class="rule-list">
+    <div class="rule-item"><span class="rule-num">01</span><span>예약은 <strong>반일 단위</strong>로만 가능합니다. 오전(09~13시) 또는 오후(13~18시) 중 선택하세요.</span></div>
+    <div class="rule-item"><span class="rule-num">02</span><span>같은 시간대·같은 GPU를 두 명이 예약할 수 없습니다. 먼저 예약한 사람이 우선입니다.</span></div>
+    <div class="rule-item"><span class="rule-num">03</span><span>본인이 등록한 예약(초록 블록)만 취소할 수 있습니다. 달력에서 블록을 클릭하세요.</span></div>
+    <div class="rule-item"><span class="rule-num">04</span><span>장기 독점 사용이 필요한 경우 팀원과 사전에 협의하세요.</span></div>
+    <div class="rule-item"><span class="rule-num">05</span><span>예약 후 30분 이내에 사용을 시작하지 않으면 다른 팀원이 사용할 수 있습니다.</span></div>
+  </div>
+</div>
+</div>
+
+<!-- ══ PAGE: 관리자 설정 ══ -->
+<div id="page-guide" class="page">
+<div class="container">
+  <div class="section-title">관리자 설정 가이드</div>
+  <div style="color:var(--muted);font-size:0.82rem;margin-bottom:1.5rem;">Google Sheets를 데이터베이스로 연결하는 방법입니다.</div>
+
+  <div class="setup-step">
+    <div class="step-num">1</div>
+    <div>
+      <div class="step-title">Google Sheets 파일 만들기</div>
+      <div class="step-desc">Google Sheets에서 새 파일을 만들고, A1부터 아래 헤더를 입력하세요:<br>
+      <span class="code-inline">id &nbsp; server &nbsp; gpu &nbsp; date &nbsp; slot &nbsp; name &nbsp; purpose &nbsp; created_at</span></div>
+    </div>
+  </div>
+
+  <div class="setup-step">
+    <div class="step-num">2</div>
+    <div>
+      <div class="step-title">Apps Script 코드 붙여넣기</div>
+      <div class="step-desc">Sheets 메뉴 → <span class="code-inline">확장 프로그램</span> → <span class="code-inline">Apps Script</span> → 아래 코드를 전체 복사해서 붙여넣고 저장하세요.</div>
+    </div>
+  </div>
+
+  <div style="background:var(--text);color:var(--bg);border-radius:6px;padding:1.2rem;font-family:var(--mono);font-size:0.72rem;line-height:1.8;margin-bottom:1rem;overflow-x:auto;">
+<pre style="white-space:pre-wrap;">const SHEET_NAME = 'Sheet1';
+
+function doGet(e) {
+  const sheet = SpreadsheetApp
+    .getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const rows = sheet.getDataRange().getValues();
+  const headers = rows[0];
+  const data = rows.slice(1).map(r => {
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = r[i]);
+    return obj;
+  });
+  return ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  const sheet = SpreadsheetApp
+    .getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const data = JSON.parse(e.postData.contents);
+  if (data.action === 'delete') {
+    const rows = sheet.getDataRange().getValues();
+    for (let i = rows.length - 1; i >= 1; i--) {
+      if (rows[i][0] == data.id) { sheet.deleteRow(i+1); break; }
+    }
+  } else {
+    sheet.appendRow([data.id, data.server, data.gpu,
+      data.date, data.slot, data.name,
+      data.purpose, data.created_at]);
+  }
+  return ContentService
+    .createTextOutput(JSON.stringify({ok:true}))
+    .setMimeType(ContentService.MimeType.JSON);
+}</pre>
+  </div>
+
+  <div class="setup-step">
+    <div class="step-num">3</div>
+    <div>
+      <div class="step-title">웹앱으로 배포</div>
+      <div class="step-desc">Apps Script에서 <span class="code-inline">배포 → 새 배포 → 웹앱</span> 선택.<br>
+      액세스 권한: <strong>"모든 사용자"</strong>로 설정 후 배포 → 생성된 URL 복사.</div>
+    </div>
+  </div>
+
+  <div class="setup-step">
+    <div class="step-num">4</div>
+    <div>
+      <div class="step-title">index.html 상단 SCRIPT_URL에 붙여넣기</div>
+      <div class="step-desc">이 파일 스크립트 최상단의 <span class="code-inline">const SCRIPT_URL = '';</span> 부분에 복사한 URL을 붙여넣으세요.</div>
+    </div>
+  </div>
+
+  <div class="setup-step">
+    <div class="step-num">5</div>
+    <div>
+      <div class="step-title">서버·GPU 정보 수정</div>
+      <div class="step-desc">스크립트 상단 <span class="code-inline">const SERVERS = [...]</span> 배열을 실제 서버 이름과 GPU 개수에 맞게 수정하세요.</div>
+    </div>
+  </div>
+
+  <div style="background:#e8f0e7;border:2px solid var(--green);border-radius:6px;padding:1rem;font-size:0.8rem;color:var(--green);line-height:1.6;">
+    <strong>✅ 설정 완료 후</strong>: 팀원이 사이트에서 예약하면 Google Sheets에 자동으로 기록되고, 모든 사람의 달력이 동기화됩니다.
+  </div>
+</div>
+</div>
+
+<!-- ── 예약 모달 ── -->
+<div class="overlay" id="bookingOverlay" onclick="closeModalOutside(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="closeBooking()">✕</button>
+    <div class="modal-title" id="modalTitle">예약하기</div>
+    <div class="modal-subtitle" id="modalSubtitle"></div>
+    <div class="form-group">
+      <label class="form-label">GPU 선택 (복수 가능)</label>
+      <div class="gpu-select-grid" id="gpuSelectGrid"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">사용 목적 (선택)</label>
+      <textarea class="form-textarea" id="bookPurpose" placeholder="예: LLaMA 파인튜닝, ViT 학습 등"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="submitBooking()" style="flex:1;">예약 확정</button>
+      <button class="btn btn-ghost" onclick="closeBooking()">취소</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 취소 모달 ── -->
+<div class="overlay" id="cancelOverlay" onclick="if(event.target===this)closeCancel()">
+  <div class="modal" style="max-width:360px;">
+    <button class="modal-close" onclick="closeCancel()">✕</button>
+    <div class="modal-title">예약 취소</div>
+    <div style="font-size:0.82rem;color:var(--muted);margin:0.8rem 0 1rem;">아래 예약을 취소하시겠습니까?</div>
+    <div id="cancelDetail" style="background:var(--bg);border-radius:6px;padding:12px;font-size:0.8rem;line-height:1.8;border:1px solid var(--border);"></div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" onclick="confirmCancel()" style="flex:1;">취소 확정</button>
+      <button class="btn btn-ghost" onclick="closeCancel()">닫기</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── TOAST ── -->
+<div class="toast" id="toast">
+  <div class="toast-title" id="toastTitle"></div>
+  <div class="toast-msg" id="toastMsg"></div>
+</div>
+
+<script>
+// ════════════════════════════════════════
+//  ★ 여기를 수정하세요
+// ════════════════════════════════════════
+
+// Apps Script 배포 URL (관리자 설정 가이드 4단계 참고)
+const SCRIPT_URL = '';  // ← 여기에 URL 붙여넣기
+
+// 서버 목록 (이름, GPU 수, 모델명 수정)
+const SERVERS = [
+  { id: 'sv1', name: 'Server-01', gpuCount: 4, gpuModel: 'A100 80GB' },
+  { id: 'sv2', name: 'Server-02', gpuCount: 4, gpuModel: 'RTX 4090'  },
+  { id: 'sv3', name: 'Server-03', gpuCount: 4, gpuModel: 'V100 32GB' },
+];
+
+// ════════════════════════════════════════
+//  STATE
+// ════════════════════════════════════════
+let currentUser = '';
+let currentServer = SERVERS[0];
+let weekOffset = 0;
+let bookings = [];
+let gpuFilter = 'all';
+let pendingBook = null;
+let pendingCancel = null;
+
+// ════════════════════════════════════════
+//  USER
+// ════════════════════════════════════════
+function confirmSetup() {
+  const name = document.getElementById('setupName').value.trim();
+  if (!name) { alert('이름을 입력해주세요.'); return; }
+  currentUser = name;
+  document.getElementById('headerUser').textContent = name;
+  document.getElementById('setupOverlay').classList.remove('open');
+  localStorage.setItem('gpu_user', name);
+  renderAll();
+}
+function changeUser() {
+  document.getElementById('setupName').value = currentUser;
+  document.getElementById('setupOverlay').classList.add('open');
+}
+
+// ════════════════════════════════════════
+//  DATA
+// ════════════════════════════════════════
+async function loadBookings() {
+  if (!SCRIPT_URL) {
+    const saved = localStorage.getItem('gpu_bookings');
+    bookings = saved ? JSON.parse(saved) : demoBookings();
+    renderAll(); return;
+  }
+  try {
+    const res = await fetch(SCRIPT_URL + '?t=' + Date.now());
+    const data = await res.json();
+    bookings = Array.isArray(data) ? data.filter(r => r.id) : [];
+  } catch {
+    const saved = localStorage.getItem('gpu_bookings');
+    bookings = saved ? JSON.parse(saved) : demoBookings();
+  }
+  renderAll();
+}
+
+function saveLocal() { localStorage.setItem('gpu_bookings', JSON.stringify(bookings)); }
+
+async function pushBooking(b) {
+  saveLocal();
+  if (!SCRIPT_URL) return;
+  try { await fetch(SCRIPT_URL, { method:'POST', body: JSON.stringify(b) }); } catch {}
+}
+
+async function removeBooking(id) {
+  bookings = bookings.filter(b => b.id !== id);
+  saveLocal();
+  if (!SCRIPT_URL) return;
+  try { await fetch(SCRIPT_URL, { method:'POST', body: JSON.stringify({ action:'delete', id }) }); } catch {}
+}
+
+function demoBookings() {
+  const today = new Date();
+  const fmt = d => d.toISOString().slice(0,10);
+  const add = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
+  return [
+    { id:'d1', server:'sv1', gpu:'GPU 0', date:fmt(today),      slot:'오전', name:'김지훈', purpose:'LLaMA 파인튜닝' },
+    { id:'d2', server:'sv1', gpu:'GPU 1', date:fmt(add(today,1)),slot:'오후', name:'이수진', purpose:'ViT 학습' },
+    { id:'d3', server:'sv2', gpu:'GPU 2', date:fmt(add(today,2)),slot:'오전', name:'박재원', purpose:'PPO 실험' },
+  ];
+}
+
+// ════════════════════════════════════════
+//  HELPERS
+// ════════════════════════════════════════
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,5); }
+
+function getWeekDates() {
+  const today = new Date();
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay()+6)%7) + weekOffset*7);
+  return Array.from({length:7}, (_,i) => { const d=new Date(monday); d.setDate(monday.getDate()+i); return d; });
+}
+
+function fmtDate(d) { return d.toISOString().slice(0,10); }
+
+function isPast(dateStr, slot) {
+  const now = new Date();
+  const d = new Date(dateStr);
+  if (fmtDate(d) < fmtDate(now)) return true;
+  if (fmtDate(d) === fmtDate(now) && slot === '오전' && now.getHours() >= 13) return true;
+  return false;
+}
+
+function showToast(title, msg, ok=true) {
+  const t = document.getElementById('toast');
+  t.style.borderLeft = `4px solid ${ok ? 'var(--green)' : 'var(--red)'}`;
+  document.getElementById('toastTitle').textContent = title;
+  document.getElementById('toastMsg').textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ════════════════════════════════════════
+//  RENDER
+// ════════════════════════════════════════
+function renderAll() {
+  renderServerTabs();
+  renderGPULegend();
+  renderCalendar();
+  renderSidebar();
+}
+
+function renderServerTabs() {
+  document.getElementById('serverTabs').innerHTML = SERVERS.map(s => `
+    <button class="server-tab ${s.id===currentServer.id?'active':''}" onclick="selectServer('${s.id}')">
+      ${s.name} <span style="opacity:0.55;font-size:0.63rem;">${s.gpuModel}</span>
+    </button>`).join('');
+}
+
+function selectServer(id) {
+  currentServer = SERVERS.find(s=>s.id===id);
+  gpuFilter = 'all';
+  renderAll();
+}
+
+function renderGPULegend() {
+  const gpus = Array.from({length:currentServer.gpuCount},(_,i)=>`GPU ${i}`);
+  document.getElementById('gpuLegend').innerHTML =
+    `<div class="gpu-chip ${gpuFilter==='all'?'selected':''}" onclick="setFilter('all')">전체</div>` +
+    gpus.map(g => `<div class="gpu-chip ${gpuFilter===g?'selected':''}" onclick="setFilter('${g}')">${g}</div>`).join('');
+}
+
+function setFilter(g) { gpuFilter = g; renderGPULegend(); renderCalendar(); }
+
+const DAY = ['월','화','수','목','금','토','일'];
+const SLOTS = ['오전','오후'];
+const SLOT_TIME = { '오전':'09~13시', '오후':'13~18시' };
+
+function renderCalendar() {
+  const dates = getWeekDates();
+  const today = new Date();
+  const m = dates[0];
+  document.getElementById('weekTitle').textContent =
+    `${m.getFullYear()}년 ${m.getMonth()+1}월 ${m.getDate()}일 주`;
+
+  let html = `<div class="cal-head-empty"></div>`;
+  dates.forEach((d,i) => {
+    const isToday = fmtDate(d) === fmtDate(today);
+    html += `<div class="cal-head${isToday?' today-col':''}">
+      <span class="day-name">${DAY[i]}</span>
+      <span class="day-num">${d.getDate()}</span>
+    </div>`;
+  });
+
+  SLOTS.forEach(slot => {
+    html += `<div class="cal-time">${slot}<span style="font-size:0.58rem;opacity:0.6;">${SLOT_TIME[slot]}</span></div>`;
+    dates.forEach(d => {
+      const dateStr = fmtDate(d);
+      const past = isPast(dateStr, slot);
+      const filter = gpuFilter === 'all' ? null : gpuFilter;
+      const cells = bookings.filter(b =>
+        b.server === currentServer.id && b.date === dateStr && b.slot === slot &&
+        (!filter || b.gpu === filter)
+      );
+      const blocks = cells.map(b => {
+        const mine = b.name === currentUser;
+        const canCancel = mine && !past;
+        return `<div class="booking-block ${mine?'mine':'others'}"
+          onclick="${canCancel?`openCancel('${b.id}');event.stopPropagation()`:''}"
+          style="cursor:${canCancel?'pointer':'default'}"
+          title="${b.name}${b.purpose?' · '+b.purpose:''}">
+          <div class="booking-name">${b.name}</div>
+          <div class="booking-gpu">${b.gpu}</div>
+        </div>`;
+      }).join('');
+
+      html += `<div class="cal-cell${past?' past':''}"
+        ${!past?`onclick="openBooking('${dateStr}','${slot}')"`:''}>${blocks}
+        ${!past?'<span class="add-hint">+ 예약</span>':''}
+      </div>`;
+    });
+  });
+
+  document.getElementById('calGrid').innerHTML = html;
+}
+
+function renderSidebar() {
+  const dates = getWeekDates();
+  const dateSet = new Set(dates.map(fmtDate));
+  const week = bookings
+    .filter(b => b.server === currentServer.id && dateSet.has(b.date))
+    .sort((a,b) => a.date.localeCompare(b.date)||a.slot.localeCompare(b.slot));
+
+  const ul = document.getElementById('upcomingList');
+  ul.innerHTML = week.length === 0
+    ? '<div style="color:var(--muted);font-size:0.78rem;">이번 주 예약 없음</div>'
+    : week.slice(0,8).map(b => `
+      <div class="upcoming-item">
+        <div class="upcoming-name">${b.name} <span style="font-weight:400;color:var(--muted);">— ${b.gpu}</span></div>
+        <div class="upcoming-meta">${b.date} · ${b.slot}${b.purpose?' · '+b.purpose:''}</div>
+      </div>`).join('');
+
+  const todayStr = fmtDate(new Date());
+  const gpus = Array.from({length:currentServer.gpuCount},(_,i)=>`GPU ${i}`);
+  document.getElementById('availSummary').innerHTML = gpus.map(gpu => {
+    const am = bookings.some(b=>b.server===currentServer.id&&b.date===todayStr&&b.slot==='오전'&&b.gpu===gpu);
+    const pm = bookings.some(b=>b.server===currentServer.id&&b.date===todayStr&&b.slot==='오후'&&b.gpu===gpu);
+    return `<div style="display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.73rem;">
+      <span style="flex:1;font-family:var(--mono);font-weight:500;">${gpu}</span>
+      <span style="padding:2px 7px;border-radius:3px;font-size:0.63rem;background:${am?'#fde8e8':'#e8f0e7'};color:${am?'var(--red)':'var(--green)'};">오전 ${am?'예약됨':'가능'}</span>
+      <span style="padding:2px 7px;border-radius:3px;font-size:0.63rem;background:${pm?'#fde8e8':'#e8f0e7'};color:${pm?'var(--red)':'var(--green)'};">오후 ${pm?'예약됨':'가능'}</span>
+    </div>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════
+//  BOOKING MODAL
+// ════════════════════════════════════════
+function openBooking(date, slot) {
+  if (!currentUser) { showToast('이름 필요', '먼저 이름을 입력해주세요.', false); return; }
+  pendingBook = { server: currentServer.id, date, slot };
+  document.getElementById('modalTitle').textContent = `${date} ${slot} 예약`;
+  document.getElementById('modalSubtitle').textContent = `${currentServer.name} · ${currentServer.gpuModel}`;
+  document.getElementById('bookPurpose').value = '';
+
+  const gpus = Array.from({length:currentServer.gpuCount},(_,i)=>`GPU ${i}`);
+  document.getElementById('gpuSelectGrid').innerHTML = gpus.map(gpu => {
+    const booked = bookings.some(b=>b.server===currentServer.id&&b.date===date&&b.slot===slot&&b.gpu===gpu);
+    return `<button class="gpu-select-btn${booked?' selected':''}"
+      onclick="this.classList.toggle('selected')"
+      ${booked?'disabled style="opacity:0.4;cursor:not-allowed;"':''}>
+      ${gpu}${booked?'<br><span style="font-size:0.58rem;opacity:0.7;">예약됨</span>':''}
+    </button>`;
+  }).join('');
+
+  document.getElementById('bookingOverlay').classList.add('open');
+}
+
+function closeBooking() { document.getElementById('bookingOverlay').classList.remove('open'); pendingBook=null; }
+function closeModalOutside(e) { if(e.target===document.getElementById('bookingOverlay')) closeBooking(); }
+
+async function submitBooking() {
+  const selected = [...document.querySelectorAll('#gpuSelectGrid .gpu-select-btn.selected:not(:disabled)')];
+  if (!selected.length) { showToast('GPU 선택', 'GPU를 하나 이상 선택하세요.', false); return; }
+
+  const purpose = document.getElementById('bookPurpose').value.trim();
+  const added = [];
+
+  for (const btn of selected) {
+    const gpu = btn.textContent.replace(/예약됨/g,'').trim();
+    const conflict = bookings.some(b=>b.server===pendingBook.server&&b.date===pendingBook.date&&b.slot===pendingBook.slot&&b.gpu===gpu);
+    if (conflict) { showToast('충돌', `${gpu}는 이미 예약되었습니다.`, false); return; }
+    const booking = { id:uid(), server:pendingBook.server, gpu, date:pendingBook.date, slot:pendingBook.slot, name:currentUser, purpose, created_at:new Date().toISOString() };
+    bookings.push(booking);
+    added.push(booking);
+  }
+
+  for (const b of added) await pushBooking(b);
+  const snap = { ...pendingBook };
+  closeBooking();
+  renderAll();
+  showToast('예약 완료 ✓', `${snap.date} ${snap.slot} · ${added.map(b=>b.gpu).join(', ')}`);
+}
+
+// ════════════════════════════════════════
+//  CANCEL MODAL
+// ════════════════════════════════════════
+function openCancel(id) {
+  pendingCancel = bookings.find(b=>b.id===id);
+  if (!pendingCancel) return;
+  document.getElementById('cancelDetail').innerHTML =
+    `<strong>${pendingCancel.name}</strong><br>${pendingCancel.date} · ${pendingCancel.slot}<br>${pendingCancel.gpu}${pendingCancel.purpose?'<br>목적: '+pendingCancel.purpose:''}`;
+  document.getElementById('cancelOverlay').classList.add('open');
+}
+function closeCancel() { document.getElementById('cancelOverlay').classList.remove('open'); pendingCancel=null; }
+
+async function confirmCancel() {
+  if (!pendingCancel) return;
+  const snap = { ...pendingCancel };
+  await removeBooking(pendingCancel.id);
+  closeCancel();
+  renderAll();
+  showToast('예약 취소됨', `${snap.date} ${snap.slot} · ${snap.gpu}`);
+}
+
+// ════════════════════════════════════════
+//  NAV / WEEK
+// ════════════════════════════════════════
+function showPage(name, btn) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(b=>b.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  btn.classList.add('active');
+  if (name==='info') {
+    document.getElementById('infoSvCount').textContent = SERVERS.length;
+    document.getElementById('infoGpuCount').textContent = SERVERS.reduce((s,sv)=>s+sv.gpuCount,0);
+    const dates = getWeekDates();
+    const ds = new Set(dates.map(fmtDate));
+    document.getElementById('infoBookCount').textContent = bookings.filter(b=>ds.has(b.date)).length;
+  }
+}
+
+function changeWeek(dir) { weekOffset += dir; renderCalendar(); renderSidebar(); }
+function goToday() { weekOffset = 0; renderCalendar(); renderSidebar(); }
+
+// ════════════════════════════════════════
+//  INIT
+// ════════════════════════════════════════
+window.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem('gpu_user');
+  if (saved) {
+    currentUser = saved;
+    document.getElementById('headerUser').textContent = saved;
+    document.getElementById('setupOverlay').classList.remove('open');
+  }
+  loadBookings();
+  if (SCRIPT_URL) setInterval(loadBookings, 5 * 60 * 1000);
+});
+</script>
+</body>
+</html>
