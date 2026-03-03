@@ -378,24 +378,18 @@ header {
 // ════════════════════════════════════════
 //  ★ 여기를 수정하세요
 // ════════════════════════════════════════
-const GITHUB_TOKEN = '';               // ← ghp_xxx 토큰 붙여넣기
-const GITHUB_REPO  = 'owner/repo';     // ← 예: jihoon/gpu-scheduler
+const GITHUB_REPO  = 'jangwj8-collab/VOIDLAB_gpu';     // ← 예: jihoon/gpu-scheduler
 
 // 서버 목록
 const SERVERS = [
-  { id: 'sv1', name: 'Server-01', gpuCount: 4, gpuModel: 'A100 80GB' },
-  { id: 'sv2', name: 'Server-02', gpuCount: 4, gpuModel: 'RTX 4090'  },
-  { id: 'sv3', name: 'Server-03', gpuCount: 4, gpuModel: 'V100 32GB' },
+  { id: 'sv1', name: 'Server-01', gpuCount: 4, gpuModel: 'RTX 4090' },
+  { id: 'sv2', name: 'not available', gpuCount: 4, gpuModel: 'RTX 4090'  },
+  { id: 'sv3', name: 'not available', gpuCount: 4, gpuModel: 'RTX 4090' },
 ];
 // ════════════════════════════════════════
 
 // ── GitHub Issues API ──
 const API = `https://api.github.com/repos/${GITHUB_REPO}/issues`;
-const HEADERS = () => ({
-  'Authorization': `token ${GITHUB_TOKEN}`,
-  'Content-Type': 'application/json',
-  'Accept': 'application/vnd.github.v3+json',
-});
 
 // Issue title 형식: [GPU] sv1 | GPU 0 | 2026-03-04 | 오전
 // Issue body: JSON으로 전체 데이터 저장
@@ -443,85 +437,42 @@ function setLoading(on) {
 }
 
 // ── GITHUB ISSUES API ──
-async function loadBookings() {
-  if (!GITHUB_TOKEN || GITHUB_TOKEN === '') {
-    // 토큰 없으면 데모 데이터
-    bookings = demoBookings();
-    renderAll(); return;
-  }
+const API_BASE = '/api';
 
+async function loadBookings() {
   setLoading(true);
   try {
-    // label로 필터링, open 상태만 = 유효한 예약
-    let page = 1;
-    let all = [];
-    while (true) {
-      const res = await fetch(
-        `${API}?labels=${LABEL}&state=open&per_page=100&page=${page}`,
-        { headers: HEADERS() }
-      );
-      if (!res.ok) throw new Error('API 오류: ' + res.status);
-      const data = await res.json();
-      if (!Array.isArray(data) || data.length === 0) break;
-      all = all.concat(data);
-      if (data.length < 100) break;
-      page++;
-    }
-
-    bookings = all.map(issue => {
-      try {
-        // body에 JSON 파싱
-        const match = issue.body && issue.body.match(/```json\n([\s\S]*?)\n```/);
-        if (match) {
-          const parsed = JSON.parse(match[1]);
-          return { ...parsed, issueNumber: issue.number };
-        }
-      } catch {}
-      return null;
-    }).filter(Boolean);
-
-    // 로컬에 캐시
-    localStorage.setItem('gpu_bookings_cache', JSON.stringify(bookings));
+    const res = await fetch(`${API_BASE}/bookings`);
+    if (!res.ok) throw new Error('로드 실패');
+    bookings = await res.json();
   } catch (err) {
-    console.error('GitHub API 오류:', err);
-    showToast('로드 실패', '캐시 데이터를 표시합니다.', false);
-    // 캐시에서 복원
-    const cached = localStorage.getItem('gpu_bookings_cache');
-    bookings = cached ? JSON.parse(cached) : demoBookings();
+    showToast('로드 실패', err.message, false);
   }
   setLoading(false);
   renderAll();
 }
 
-async function syncBookings() {
-  await loadBookings();
-  showToast('동기화 완료', `예약 ${bookings.length}건 로드됨`);
-}
-
 async function createBookingIssue(booking) {
-  const title = `[GPU] ${booking.server} | ${booking.gpu} | ${booking.date} | ${booking.slot}`;
-  const body = `### GPU 예약\n\n| 항목 | 내용 |\n|---|---|\n| 서버 | ${booking.server} |\n| GPU | ${booking.gpu} |\n| 날짜 | ${booking.date} |\n| 시간대 | ${booking.slot} |\n| 예약자 | ${booking.name} |\n| 목적 | ${booking.purpose || '-'} |\n\n\`\`\`json\n${JSON.stringify(booking, null, 2)}\n\`\`\``;
-
-  const res = await fetch(API, {
+  const res = await fetch(`${API_BASE}/create`, {
     method: 'POST',
-    headers: HEADERS(),
-    body: JSON.stringify({ title, body, labels: [LABEL] }),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(booking),
   });
 
-  if (!res.ok) throw new Error('예약 생성 실패: ' + res.status);
-  const issue = await res.json();
-  return issue.number;
+  if (!res.ok) throw new Error('예약 생성 실패');
+  const data = await res.json();
+  return data.issueNumber;
 }
 
 async function closeBookingIssue(issueNumber) {
-  const res = await fetch(`${API}/${issueNumber}`, {
-    method: 'PATCH',
-    headers: HEADERS(),
-    body: JSON.stringify({ state: 'closed' }),
+  const res = await fetch(`${API_BASE}/close`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ issueNumber }),
   });
-  if (!res.ok) throw new Error('예약 취소 실패');
-}
 
+  if (!res.ok) throw new Error('취소 실패');
+}
 // ── LABEL 자동 생성 ──
 async function ensureLabel() {
   try {
