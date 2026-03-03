@@ -624,9 +624,6 @@ function demoBookings() {
   const fmt = d => d.toISOString().slice(0,10);
   const add = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
   return [
-    { id:'d1', server:'sv1', gpu:'GPU 0', date:fmt(today),      slot:'오전', name:'김지훈', purpose:'LLaMA 파인튜닝' },
-    { id:'d2', server:'sv1', gpu:'GPU 1', date:fmt(add(today,1)),slot:'오후', name:'이수진', purpose:'ViT 학습' },
-    { id:'d3', server:'sv2', gpu:'GPU 2', date:fmt(add(today,2)),slot:'오전', name:'박재원', purpose:'PPO 실험' },
   ];
 }
 
