@@ -594,10 +594,17 @@ async function loadBookings() {
     renderAll(); return;
   }
   try {
-    const res = await fetch(SCRIPT_URL + '?t=' + Date.now());
+    // ★ CORS 우회: no-cors 대신 jsonp 방식 사용
+    const url = SCRIPT_URL + '?t=' + Date.now() + '&callback=?';
+    const res = await fetch(SCRIPT_URL + '?t=' + Date.now(), {
+      method: 'GET',
+      mode: 'cors',
+    });
     const data = await res.json();
     bookings = Array.isArray(data) ? data.filter(r => r.id) : [];
-  } catch {
+    saveLocal();
+  } catch(err) {
+    console.warn('Sheets GET 실패, 로컬 사용:', err);
     const saved = localStorage.getItem('gpu_bookings');
     bookings = saved ? JSON.parse(saved) : demoBookings();
   }
