@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GPU 예약 스케줄러</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&family=JetBrains+Mono:wght@400;500&family=Pretendard:wght@400;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Dodum&family=DM+Mono:wght@300;400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
   --bg: #f5f2eb;
@@ -19,7 +19,7 @@
   --red: #c0392b;
   --green: #2d5a27;
   --mono: 'DM Mono', monospace;
-  --sans: 'Pretendard', sans-serif;
+  --sans: 'Syne', sans-serif;
   --body: 'Gowun Dodum', sans-serif;
 }
 
@@ -379,8 +379,8 @@ header {
         <div style="font-size:0.75rem;line-height:1.8;opacity:0.85;">
           · 오전: 09:00 ~ 13:00<br>
           · 오후: 13:00 ~ 18:00<br>
-          · 최대 연속 사용: 3일<br>
-          · 장기/긴급 사용 시 사전 협의
+          · 최대 연속 사용: 1일<br>
+          · 긴급 사용 시 사전 협의
         </div>
       </div>
     </div>
@@ -547,13 +547,13 @@ function doPost(e) {
 // ════════════════════════════════════════
 
 // Apps Script 배포 URL (관리자 설정 가이드 4단계 참고)
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbypyF35m3Yez2hg86IqR1Dky-kOkPtJVT2DM6wGNt9ICS7VFcLtybK8iepyTXp6UZskUw/exec';  // 여기에 URL 붙여넣기
+const SCRIPT_URL = '';  // ← 여기에 URL 붙여넣기
 
 // 서버 목록 (이름, GPU 수, 모델명 수정)
 const SERVERS = [
-  { id: 'sv1', name: 'Server-01', gpuCount: 4, gpuModel: 'RTX 4090' },
-  { id: 'sv2', name: 'Not Available Yet', gpuCount: 4, gpuModel: 'RTX 5090'  },
-  { id: 'sv3', name: 'Not Available Yet', gpuCount: 4, gpuModel: 'RTX 5090' },
+  { id: 'sv1', name: 'Server-01', gpuCount: 4, gpuModel: 'A100 80GB' },
+  { id: 'sv2', name: 'Server-02', gpuCount: 4, gpuModel: 'RTX 4090'  },
+  { id: 'sv3', name: 'Server-03', gpuCount: 4, gpuModel: 'V100 32GB' },
 ];
 
 // ════════════════════════════════════════
@@ -587,28 +587,40 @@ function changeUser() {
 // ════════════════════════════════════════
 //  DATA
 // ════════════════════════════════════════
-async function loadBookings() {
+function loadBookings() {
   if (!SCRIPT_URL) {
     const saved = localStorage.getItem('gpu_bookings');
     bookings = saved ? JSON.parse(saved) : demoBookings();
     renderAll(); return;
   }
-  try {
-    // ★ CORS 우회: no-cors 대신 jsonp 방식 사용
-    const url = SCRIPT_URL + '?t=' + Date.now() + '&callback=?';
-    const res = await fetch(SCRIPT_URL + '?t=' + Date.now(), {
-      method: 'GET',
-      mode: 'cors',
-    });
-    const data = await res.json();
-    bookings = Array.isArray(data) ? data.filter(r => r.id) : [];
-    saveLocal();
-  } catch(err) {
-    console.warn('Sheets GET 실패, 로컬 사용:', err);
-    const saved = localStorage.getItem('gpu_bookings');
-    bookings = saved ? JSON.parse(saved) : demoBookings();
-  }
-  renderAll();
+
+  // JSONP 방식으로 CORS 우회
+  return new Promise((resolve) => {
+    const cbName = 'gpuCb_' + Date.now();
+    const script = document.createElement('script');
+
+    window[cbName] = function(data) {
+      delete window[cbName];
+      document.body.removeChild(script);
+      bookings = Array.isArray(data) ? data.filter(r => r.id) : [];
+      saveLocal();
+      renderAll();
+      resolve();
+    };
+
+    script.onerror = function() {
+      delete window[cbName];
+      document.body.removeChild(script);
+      console.warn('Sheets 로드 실패, 로컬 데이터 사용');
+      const saved = localStorage.getItem('gpu_bookings');
+      bookings = saved ? JSON.parse(saved) : demoBookings();
+      renderAll();
+      resolve();
+    };
+
+    script.src = SCRIPT_URL + '?callback=' + cbName + '&t=' + Date.now();
+    document.body.appendChild(script);
+  });
 }
 
 function saveLocal() { localStorage.setItem('gpu_bookings', JSON.stringify(bookings)); }
@@ -631,6 +643,9 @@ function demoBookings() {
   const fmt = d => d.toISOString().slice(0,10);
   const add = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r; };
   return [
+    { id:'d1', server:'sv1', gpu:'GPU 0', date:fmt(today),      slot:'오전', name:'김지훈', purpose:'LLaMA 파인튜닝' },
+    { id:'d2', server:'sv1', gpu:'GPU 1', date:fmt(add(today,1)),slot:'오후', name:'이수진', purpose:'ViT 학습' },
+    { id:'d3', server:'sv2', gpu:'GPU 2', date:fmt(add(today,2)),slot:'오전', name:'박재원', purpose:'PPO 실험' },
   ];
 }
 
